@@ -1,17 +1,17 @@
-# Basic-Block Optimizer (Project Review 1 - ~25%)
+# Basic-Block Optimizer 
 
 **Problem:** Design and implement a basic-block optimizer. Construct basic blocks
 and a control-flow graph, then apply constant folding, algebraic simplification,
 and common subexpression elimination.
 
-## Done so far (~25%)
+## Completed
 - Three-address-code parser (`optimizer/tac.py`)
 - Basic block construction via the leader algorithm (`optimizer/basic_blocks.py`)
 - Control-flow graph + unreachable-block detection (`optimizer/cfg.py`)
 - Constant folding with local constant propagation (`optimizer/constant_folding.py`)
 - Very basic Tkinter GUI (`gui.py`), CLI (`main.py`), unit tests (`tests/`)
 
-## Remaining
+## Future Scope
 - Algebraic simplification (`optimizer/algebraic_simplification.py`, stub)
 - Common subexpression elimination (`optimizer/cse.py`, stub)
 - Folding of constant conditional jumps + CFG update, graph drawing in GUI

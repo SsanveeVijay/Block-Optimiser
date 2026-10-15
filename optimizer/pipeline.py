@@ -1,8 +1,8 @@
 """
-optimizer/pipeline.py  –  Orchestrates the full compiler pipeline.
+optimizer/pipeline.py  –  Orchestrates the compiler pipeline.
 
 Two entry points:
-  run(source)        – TAC input (legacy / direct TAC mode)
+  run(source)        – TAC input (direct TAC mode)
   run_source(source) – Full pipeline: source language →
                          Lex → Parse → Semantic → Codegen → Optimise
 """
@@ -11,8 +11,7 @@ from .tac import parse
 from .basic_blocks import build_blocks
 from .cfg import CFG
 from .constant_folding import fold_all
-from .algebraic_simplification import simplify_all
-from .cse import cse_all
+from .impact_analyzer import analyze as impact_analyze
 
 
 # --------------------------------------------------------------------------- #
@@ -41,46 +40,44 @@ def fmt_cfg(cfg):
     return "\n".join(lines)
 
 
-def _fmt_log(log):
+def _fmt_fold_log(log):
     return (
         "\n".join(f"[{n}] {c}" for n, ch in log.items() for c in ch)
-        or "  (none)"
+        or "No constants folded."
     )
 
 
+# --------------------------------------------------------------------------- #
+#  Shared optimisation core                                                    #
+# --------------------------------------------------------------------------- #
+
 def _optimise(blocks):
-    """Run the three optimisation passes and return enriched result dict."""
+    """Run optimisation passes and return a unified result dict."""
     cfg = CFG(blocks)
 
-    # Pass 1: Constant folding
+    # Pass: Constant folding
     folded, fold_log = fold_all(blocks)
 
-    # Pass 2: Algebraic simplification
-    simplified, alg_log = simplify_all(folded)
-
-    # Pass 3: CSE
-    cse_blocks, cse_log = cse_all(simplified)
+    # Impact analysis across the passes
+    impact = impact_analyze(
+        original_blocks=blocks,
+        pass_results=[
+            ("Constant Folding", folded),
+        ],
+    )
 
     return {
-        "blocks": blocks,
-        "cfg": cfg,
-        "folded": folded,
-        "simplified": simplified,
-        "optimised": cse_blocks,
-        "fold_log": fold_log,
-        "alg_log": alg_log,
-        "cse_log": cse_log,
+        "blocks":       blocks,
+        "cfg":          cfg,
+        "folded":       folded,
+        "fold_log":     fold_log,
+        "impact":       impact,
         # ---- text versions ----
-        "blocks_text": fmt_blocks(blocks),
-        "cfg_text": fmt_cfg(cfg),
-        "folded_text": fmt_blocks(folded),
-        "simplified_text": fmt_blocks(simplified),
-        "optimised_text": fmt_blocks(cse_blocks),
-        "log_text": (
-            "=== Constant Folding ===\n" + _fmt_log(fold_log) + "\n\n"
-            "=== Algebraic Simplification ===\n" + _fmt_log(alg_log) + "\n\n"
-            "=== Common Subexpression Elimination ===\n" + _fmt_log(cse_log)
-        ),
+        "blocks_text":  fmt_blocks(blocks),
+        "cfg_text":     fmt_cfg(cfg),
+        "folded_text":  fmt_blocks(folded),
+        "log_text":     _fmt_fold_log(fold_log),
+        "impact_text":  impact.summary_text(),
     }
 
 
@@ -89,11 +86,8 @@ def _optimise(blocks):
 # --------------------------------------------------------------------------- #
 
 def run(source: str) -> dict:
-    """
-    Legacy TAC-only pipeline.
-    Input: raw three-address code text.
-    """
-    prog = parse(source)
+    """TAC-only pipeline. Input: raw three-address code text."""
+    prog   = parse(source)
     blocks = build_blocks(prog)
     return _optimise(blocks)
 
@@ -103,14 +97,14 @@ def run_source(source: str) -> dict:
     Full compiler pipeline.
     Input: simple C-like source code.
     Returns the same keys as run() PLUS:
-      ast, ast_text, semantic_issues, tac_lines, tac_text
+      ast, ast_text, semantic_text, tac_lines, tac_text
     """
     from .parser_ast import parse_source, ast_to_str
-    from .semantic import analyse
-    from .codegen import generate, tac_lines_to_str
+    from .semantic   import analyse
+    from .codegen    import generate, tac_lines_to_str
 
     # 1. Syntax analysis (lex + parse)
-    ast = parse_source(source)
+    ast      = parse_source(source)
     ast_text = ast_to_str(ast)
 
     # 2. Semantic analysis
@@ -118,19 +112,19 @@ def run_source(source: str) -> dict:
 
     # 3. Intermediate code generation (TAC)
     tac_lines = generate(ast)
-    tac_text = tac_lines_to_str(tac_lines)
+    tac_text  = tac_lines_to_str(tac_lines)
 
     # 4. Parse generated TAC and run optimisation passes
-    prog = parse(tac_text)
+    prog   = parse(tac_text)
     blocks = build_blocks(prog)
     result = _optimise(blocks)
 
     result.update({
-        "ast": ast,
-        "ast_text": ast_text,
+        "ast":           ast,
+        "ast_text":      ast_text,
         "semantic_text": semantic_text,
-        "tac_lines": tac_lines,
-        "tac_text": tac_text,
-        "mode": "source",
+        "tac_lines":     tac_lines,
+        "tac_text":      tac_text,
+        "mode":          "source",
     })
     return result

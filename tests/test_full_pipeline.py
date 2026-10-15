@@ -1,6 +1,6 @@
 """
 tests/test_full_pipeline.py  –  Tests for the full compiler pipeline.
-Covers: lexer, parser, semantic analysis, codegen, algebraic simplification, CSE.
+Covers: lexer, parser, semantic analysis, codegen, impact analyzer.
 """
 
 import os, sys, unittest
@@ -13,8 +13,7 @@ from optimizer.parser_ast import parse_source, ast_to_str, ParseError, Program
 from optimizer.semantic import analyse
 from optimizer.codegen import generate, tac_lines_to_str
 from optimizer.pipeline import run, run_source
-from optimizer.algebraic_simplification import simplify_all
-from optimizer.cse import cse_all
+from optimizer.impact_analyzer import analyze as impact_analyze
 from optimizer.tac import parse
 from optimizer.basic_blocks import build_blocks
 
@@ -135,61 +134,51 @@ class TestCodeGen(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-#  Algebraic simplification tests                                             #
+#  Impact Analyzer tests                                                       #
 # --------------------------------------------------------------------------- #
 
-class TestAlgebraicSimplification(unittest.TestCase):
-    def _run_simpl(self, src):
-        prog = parse(src)
-        blocks = build_blocks(prog)
-        simplified, log = simplify_all(blocks)
-        text = "\n".join(str(i) for b in simplified for i in b.instrs)
-        return text, log
+class TestImpactAnalyzer(unittest.TestCase):
+    def _blocks(self, src):
+        return build_blocks(parse(src))
 
-    def test_add_zero(self):
-        text, log = self._run_simpl("a = x + 0\nreturn a\n")
-        self.assertIn("a = x", text)
+    def test_reduction_detected(self):
+        """Constant folding reduces instruction count — impact report should reflect this."""
+        from optimizer.constant_folding import fold_all
+        blocks = self._blocks("a = 2 + 3\nb = a * 4\nreturn b\n")
+        folded, _ = fold_all(blocks)
+        report = impact_analyze(blocks, [("Constant Folding", folded)])
+        # folded text has fewer or equal instructions
+        self.assertGreaterEqual(report.passes[0].before_count, report.passes[0].after_count)
 
-    def test_mul_one(self):
-        text, log = self._run_simpl("a = x * 1\nreturn a\n")
-        self.assertIn("a = x", text)
+    def test_no_change_zero_reduction(self):
+        """If nothing changes, reduction should be 0%."""
+        blocks = self._blocks("return x\n")
+        report = impact_analyze(blocks, [("Constant Folding", blocks)])
+        self.assertEqual(report.overall_reduction_pct, 0.0)
+        self.assertEqual(report.total_transformations, 0)
 
-    def test_mul_zero(self):
-        text, log = self._run_simpl("a = x * 0\nreturn a\n")
-        self.assertIn("a = 0", text)
+    def test_report_keys_present(self):
+        res = run("a = 2 + 3\nreturn a\n")
+        self.assertIn("impact_text", res)
+        self.assertIn("impact", res)
 
-    def test_sub_self(self):
-        text, log = self._run_simpl("a = x - x\nreturn a\n")
-        self.assertIn("a = 0", text)
+    def test_report_text_contains_bar_chart(self):
+        res = run("a = 2 + 3\nb = a * 4\nreturn b\n")
+        self.assertIn("█", res["impact_text"])   # bar chart drawn
+        self.assertIn("Original", res["impact_text"])
 
+    def test_report_text_contains_pass_name(self):
+        res = run("a = 2 + 3\nreturn a\n")
+        self.assertIn("Constant Folding", res["impact_text"])
 
-# --------------------------------------------------------------------------- #
-#  CSE tests                                                                   #
-# --------------------------------------------------------------------------- #
-
-class TestCSE(unittest.TestCase):
-    def _run_cse(self, src):
-        prog = parse(src)
-        blocks = build_blocks(prog)
-        cse_blocks, log = cse_all(blocks)
-        return cse_blocks, log
-
-    def test_cse_eliminates_duplicate(self):
-        src = "t1 = a + b\nt2 = a + b\nreturn t2\n"
-        blocks, log = self._run_cse(src)
-        changes = [c for ch in log.values() for c in ch]
-        self.assertTrue(any("CSE" in c for c in changes))
-
-    def test_cse_no_false_elimination_after_redef(self):
-        src = "t1 = a + b\na = 5\nt2 = a + b\nreturn t2\n"
-        blocks, log = self._run_cse(src)
-        # After a is redefined, t2 = a + b should NOT be eliminated
-        changes = [c for ch in log.values() for c in ch]
-        self.assertFalse(any("CSE" in c for c in changes))
+    def test_transformations_counted(self):
+        """2+3 folds to 5, so at least 1 transformation should be recorded."""
+        res = run("a = 2 + 3\nreturn a\n")
+        self.assertGreater(res["impact"].total_transformations, 0)
 
 
 # --------------------------------------------------------------------------- #
-#  Full end-to-end pipeline test                                               #
+#  Full end-to-end pipeline tests                                              #
 # --------------------------------------------------------------------------- #
 
 class TestFullPipeline(unittest.TestCase):
@@ -208,7 +197,7 @@ return i;
         res = run_source(self._src)
         for key in ("ast_text", "semantic_text", "tac_text",
                     "blocks_text", "cfg_text", "folded_text",
-                    "simplified_text", "optimised_text", "log_text"):
+                    "log_text", "impact_text"):
             self.assertIn(key, res, f"Missing key: {key}")
 
     def test_run_source_constant_folded(self):

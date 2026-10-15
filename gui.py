@@ -13,7 +13,7 @@ from tkinter import ttk, messagebox
 
 from optimizer.pipeline import run, run_source
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE    = os.path.dirname(os.path.abspath(__file__))
 SAMPLES = os.path.join(HERE, "samples")
 
 
@@ -37,19 +37,18 @@ class App(tk.Tk):
         row.pack(fill="x", pady=6)
 
         sample_files = sorted(os.listdir(SAMPLES))
-        self.sample = ttk.Combobox(row, values=sample_files,
-                                   state="readonly", width=20)
+        self.sample  = ttk.Combobox(row, values=sample_files,
+                                    state="readonly", width=20)
         self.sample.pack(side="left")
-        ttk.Button(row, text="Load", command=self.load).pack(side="left", padx=4)
+        ttk.Button(row, text="Load",         command=self.load).pack(side="left", padx=4)
         ttk.Button(row, text="Run Pipeline", command=self.analyze).pack(side="left")
 
-        # Mode label
         self.mode_var = tk.StringVar(value="")
         ttk.Label(left, textvariable=self.mode_var,
                   foreground="gray").pack(anchor="w", pady=(4, 0))
 
         # ------------------------------------------------------------------ #
-        #  Right panel – tabs                                                 #
+        #  Right panel – tabs (one per pipeline stage)                        #
         # ------------------------------------------------------------------ #
         right = ttk.Frame(self)
         right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
@@ -58,33 +57,29 @@ class App(tk.Tk):
         self.tabs.pack(fill="both", expand=True)
         self.out: dict[str, tk.Text] = {}
 
-        # Tabs in pipeline order
         tab_defs = [
-            ("ast_text",        "1. AST"),
-            ("semantic_text",   "2. Semantic"),
-            ("tac_text",        "3. TAC (Generated)"),
-            ("blocks_text",     "4. Basic Blocks"),
-            ("cfg_text",        "5. CFG"),
-            ("folded_text",     "6. Constant Folding"),
-            ("simplified_text", "7. Algebraic Simpl."),
-            ("optimised_text",  "8. After CSE"),
-            ("log_text",        "9. Change Log"),
+            ("ast_text",      "1. AST"),
+            ("semantic_text", "2. Semantic"),
+            ("tac_text",      "3. TAC (Generated)"),
+            ("blocks_text",   "4. Basic Blocks"),
+            ("cfg_text",      "5. CFG"),
+            ("folded_text",   "6. Constant Folding"),
+            ("log_text",      "7. Change Log"),
+            ("impact_text",   "8. Impact Analyzer"),   # ← novelty feature
         ]
 
         for key, title in tab_defs:
             frame = ttk.Frame(self.tabs)
             self.tabs.add(frame, text=title)
-            t = tk.Text(frame, font=("Courier", 10), state="disabled",
-                        wrap="none")
-            vsb = ttk.Scrollbar(frame, orient="vertical", command=t.yview)
+            t   = tk.Text(frame, font=("Courier", 10), state="disabled", wrap="none")
+            vsb = ttk.Scrollbar(frame, orient="vertical",   command=t.yview)
             hsb = ttk.Scrollbar(frame, orient="horizontal", command=t.xview)
             t.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-            vsb.pack(side="right", fill="y")
+            vsb.pack(side="right",  fill="y")
             hsb.pack(side="bottom", fill="x")
             t.pack(fill="both", expand=True)
             self.out[key] = t
 
-        # Load first sample
         if sample_files:
             self.sample.current(0)
             self.load()
@@ -93,8 +88,7 @@ class App(tk.Tk):
     # ---------------------------------------------------------------------- #
 
     def load(self):
-        name = self.sample.get()
-        path = os.path.join(SAMPLES, name)
+        path = os.path.join(SAMPLES, self.sample.get())
         with open(path) as f:
             self.inp.delete("1.0", "end")
             self.inp.insert("1.0", f.read())
@@ -107,8 +101,8 @@ class App(tk.Tk):
         w.config(state="disabled")
 
     def analyze(self):
-        src = self.inp.get("1.0", "end").strip()
-        name = self.sample.get()
+        src      = self.inp.get("1.0", "end").strip()
+        name     = self.sample.get()
         is_source = name.endswith(".src")
 
         try:
@@ -122,26 +116,21 @@ class App(tk.Tk):
             messagebox.showerror("Pipeline Error", str(e))
             return
 
-        # --- populate all tabs ---
-        if is_source:
-            self._set_tab("ast_text",        res.get("ast_text", ""))
-            self._set_tab("semantic_text",    res.get("semantic_text", ""))
-            self._set_tab("tac_text",         res.get("tac_text", ""))
-        else:
-            self._set_tab("ast_text",
-                "N/A — load a .src file to see the AST.\n\n"
-                "(TAC files skip directly to basic-block construction.)")
-            self._set_tab("semantic_text",
-                "N/A — load a .src file to see semantic analysis.")
-            self._set_tab("tac_text",
-                "N/A — TAC was provided directly as input.")
+        NA_ast = (
+            "N/A — load a .src file to see the AST.\n\n"
+            "(TAC files skip directly to basic-block construction.)"
+        )
+        NA_sem = "N/A — load a .src file to see semantic analysis."
+        NA_tac = "N/A — TAC was provided directly as input."
 
-        self._set_tab("blocks_text",     res.get("blocks_text", ""))
-        self._set_tab("cfg_text",        res.get("cfg_text", ""))
-        self._set_tab("folded_text",     res.get("folded_text", ""))
-        self._set_tab("simplified_text", res.get("simplified_text", ""))
-        self._set_tab("optimised_text",  res.get("optimised_text", ""))
-        self._set_tab("log_text",        res.get("log_text", ""))
+        self._set_tab("ast_text",      res.get("ast_text",      NA_ast))
+        self._set_tab("semantic_text", res.get("semantic_text", NA_sem))
+        self._set_tab("tac_text",      res.get("tac_text",      NA_tac))
+        self._set_tab("blocks_text",   res["blocks_text"])
+        self._set_tab("cfg_text",      res["cfg_text"])
+        self._set_tab("folded_text",   res["folded_text"])
+        self._set_tab("log_text",      res["log_text"])
+        self._set_tab("impact_text",   res["impact_text"])
 
 
 if __name__ == "__main__":

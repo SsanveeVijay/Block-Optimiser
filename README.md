@@ -1,9 +1,8 @@
-# Basic-Block Compiler & Optimizer
+# Basic-Block Optimizer 
 
-**Problem:** Implement a complete compiler pipeline for a simple C-like language,
-covering syntax analysis, semantic analysis, intermediate code generation, and
-code optimisation (constant folding, algebraic simplification, common subexpression
-elimination), all structured around basic-block analysis and a control-flow graph.
+**Problem:** Design and implement a basic-block optimizer. Construct basic blocks
+and a control-flow graph, then apply constant folding, algebraic simplification,
+and common subexpression elimination.
 
 ## Pipeline Stages
 

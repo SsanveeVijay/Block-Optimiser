@@ -44,9 +44,8 @@ def main():
     print_section("BASIC BLOCKS", res["blocks_text"])
     print_section("CONTROL FLOW GRAPH", res["cfg_text"])
     print_section("AFTER CONSTANT FOLDING", res["folded_text"])
-    print_section("AFTER ALGEBRAIC SIMPLIFICATION", res["simplified_text"])
-    print_section("AFTER CSE", res["optimised_text"])
     print_section("CHANGE LOG", res["log_text"])
+    print_section("OPTIMIZATION IMPACT REPORT", res["impact_text"])
 
 
 if __name__ == "__main__":

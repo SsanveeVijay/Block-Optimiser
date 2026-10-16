@@ -1,6 +1,3 @@
-// Sample source program demonstrating the full compiler pipeline
-// Variable declarations, arithmetic, if/else, while loop
-
 int a = 2 + 3;
 int b = a * 4;
 int i = 0;

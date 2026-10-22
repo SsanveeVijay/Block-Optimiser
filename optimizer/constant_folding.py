@@ -1,55 +1,46 @@
+"""Local numeric folding and propagation; trapping expressions are retained."""
 from dataclasses import replace
-from .tac import is_int
+from .numeric import is_number, number, evaluate
 from .basic_blocks import Block
 from .tac import Instr
 
 
 def _eval(op, x, y):
-    if op == "+": return x + y
-    if op == "-": return x - y
-    if op == "*": return x * y
-    if op in ("/", "%"):
-        if y == 0:
-            return None                      
-        q = abs(x) // abs(y)
-        q = q if (x >= 0) == (y >= 0) else -q
-        return q if op == "/" else x - q * y
-    cmp = {"<": x < y, ">": x > y, "<=": x <= y, ">=": x >= y,
-           "==": x == y, "!=": x != y}
-    return int(cmp[op])
+    try:
+        return evaluate(op, x, y)
+    except (ArithmeticError, ValueError):
+        return None
 
 
-def fold_block(block: Block):
-    env, out, log = {}, [], []
-    for ins in block.instrs:
-        new = replace(ins)
-        if new.kind in ("assign", "binop", "cond", "return"):
-            if new.a is not None:
-                new.a = env.get(new.a, new.a)
-            if new.b is not None:
-                new.b = env.get(new.b, new.b)
-
-        if new.kind == "binop" and is_int(new.a) and is_int(new.b):
-            val = _eval(new.op, int(new.a), int(new.b))
-            if val is not None:
-                new = Instr("assign", dest=new.dest, a=str(val))
-
-        if new.kind in ("assign", "binop"):
-            if new.kind == "assign" and is_int(new.a):
-                env[new.dest] = new.a
+def fold_block(block):
+    environment, output, log = {}, [], []
+    for instruction in block.instrs:
+        new = replace(instruction)
+        if new.kind in ("assign", "binop", "cast", "cond", "return"):
+            new.a = environment.get(new.a, new.a)
+            new.b = environment.get(new.b, new.b)
+        value = None
+        if new.kind == "binop" and is_number(new.a) and is_number(new.b):
+            value = _eval(new.op, number(new.a), number(new.b))
+        elif new.kind == "cast" and is_number(new.a):
+            try:
+                value = (int if new.op == "int" else float)(number(new.a))
+                # Reject a non-finite conversion just as a non-finite literal.
+                number(str(value))
+            except (ArithmeticError, ValueError):
+                value = None
+        if value is not None:
+            new = Instr("assign", dest=new.dest, a=str(value), line=new.line)
+        if new.dest:
+            if new.kind == "assign" and is_number(new.a):
+                environment[new.dest] = new.a
             else:
-                env.pop(new.dest, None)
-
-        if str(new) != str(ins):
-            log.append(f"{ins}   ==>   {new}")
-        out.append(new)
-    return Block(block.name, out), log
+                environment.pop(new.dest, None)
+        if str(new) != str(instruction): log.append(f"{instruction} => {new}")
+        output.append(new)
+    return Block(block.name, output), log
 
 
 def fold_all(blocks):
-    new_blocks, log = [], {}
-    for b in blocks:
-        nb, changes = fold_block(b)
-        new_blocks.append(nb)
-        log[b.name] = changes
-    return new_blocks, log
+    results = [fold_block(block) for block in blocks]
+    return [b for b, _ in results], {b.name: log for b, log in results}

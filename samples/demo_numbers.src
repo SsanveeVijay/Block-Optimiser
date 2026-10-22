@@ -1,0 +1,5 @@
+// Expected result: -1.5; conversion warning is intentional.
+float rate = 2.5;
+int count = -3.8;
+float answer = rate + count / 2;
+return -answer;

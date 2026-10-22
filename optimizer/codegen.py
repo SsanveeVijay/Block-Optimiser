@@ -1,182 +1,95 @@
-"""
-optimizer/codegen.py  –  Intermediate Code Generation (Three-Address Code).
-
-Walks the AST and emits TAC instructions as strings.
-The output is a list of TAC lines compatible with optimizer/tac.py.
-
-Temporary variables:  t0, t1, t2, ...
-Labels:               L0, L1, L2, ...
-"""
-
-from typing import List
-from .parser_ast import (
-    ASTNode, Program, DeclStmt, AssignStmt, Block,
-    IfStmt, WhileStmt, ReturnStmt, BinOp, UnaryOp, NumberLit, Var
-)
-
-# Map AST operator tokens to TAC operators
-_OP_MAP = {
-    "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-    "<": "<", ">": ">", "<=": "<=", ">=": ">=", "==": "==", "!=": "!=",
-}
+"""Generate TAC with distinct scoped names and explicit numeric conversions."""
+from .parser_ast import (Program, DeclStmt, AssignStmt, Block, IfStmt, WhileStmt,
+                         ReturnStmt, BinOp, UnaryOp, NumberLit, Var)
+from .semantic import analyse
+from .diagnostics import CompilationError
 
 
 class CodeGen:
     def __init__(self):
-        self._code: List[str] = []
+        self._code = []
         self._tmp_counter = 0
         self._label_counter = 0
 
-    # -- helpers -------------------------------------------------------------- #
-
-    def _new_tmp(self) -> str:
-        name = f"t{self._tmp_counter}"
+    def _new_tmp(self):
+        name = f"__t{self._tmp_counter}"
         self._tmp_counter += 1
         return name
 
-    def _new_label(self) -> str:
-        name = f"L{self._label_counter}"
+    def _new_label(self):
+        name = f"__L{self._label_counter}"
         self._label_counter += 1
         return name
 
-    def _emit(self, instr: str):
-        self._code.append(instr)
+    def _emit(self, text): self._code.append(text)
 
-    # -- visitors ------------------------------------------------------------- #
+    def _assign(self, symbol, expression):
+        place = self.gen(expression)
+        conversion = symbol.typ + " " if symbol.typ != expression.value_type else ""
+        self._emit(f"{symbol.tac_name} = {conversion}{place}")
+        return symbol.tac_name
 
-    def gen(self, node: ASTNode) -> str:
-        """Generate code for node; returns the 'place' holding its value."""
-        if isinstance(node, Program):
-            return self._gen_program(node)
+    def _condition(self, expression, target):
+        if isinstance(expression, BinOp) and expression.op in ("<", ">", "<=", ">=", "==", "!="):
+            left, right = self.gen(expression.left), self.gen(expression.right)
+            self._emit(f"if {left} {expression.op} {right} goto {target}")
+        else:
+            place = self.gen(expression)
+            self._emit(f"if {place} != 0 goto {target}")
+
+    def gen(self, node):
+        if isinstance(node, (Program, Block)):
+            for statement in node.stmts: self.gen(statement)
+            return ""
         if isinstance(node, DeclStmt):
-            return self._gen_decl(node)
-        if isinstance(node, AssignStmt):
-            return self._gen_assign(node)
-        if isinstance(node, Block):
-            return self._gen_block(node)
-        if isinstance(node, IfStmt):
-            return self._gen_if(node)
-        if isinstance(node, WhileStmt):
-            return self._gen_while(node)
-        if isinstance(node, ReturnStmt):
-            return self._gen_return(node)
+            if node.init is not None: self._assign(node.symbol, node.init)
+            return node.symbol.tac_name
+        if isinstance(node, AssignStmt): return self._assign(node.symbol, node.value)
+        if isinstance(node, Var): return node.symbol.tac_name
+        if isinstance(node, NumberLit): return node.value
         if isinstance(node, BinOp):
-            return self._gen_binop(node)
+            left, right = self.gen(node.left), self.gen(node.right)
+            temporary = self._new_tmp()
+            self._emit(f"{temporary} = {left} {node.op} {right}")
+            return temporary
         if isinstance(node, UnaryOp):
-            return self._gen_unary(node)
-        if isinstance(node, NumberLit):
-            return node.value
-        if isinstance(node, Var):
-            return node.name
-        raise NotImplementedError(f"CodeGen: unknown node {type(node).__name__}")
-
-    def _gen_program(self, node: Program) -> str:
-        for s in node.stmts:
-            self.gen(s)
-        return ""
-
-    def _gen_decl(self, node: DeclStmt) -> str:
-        if node.init:
-            place = self.gen(node.init)
-            self._emit(f"{node.name} = {place}")
-        return node.name
-
-    def _gen_assign(self, node: AssignStmt) -> str:
-        place = self.gen(node.value)
-        self._emit(f"{node.name} = {place}")
-        return node.name
-
-    def _gen_block(self, node: Block) -> str:
-        for s in node.stmts:
-            self.gen(s)
-        return ""
-
-    def _gen_if(self, node: IfStmt) -> str:
-        # Evaluate condition as a binop; fall through to else / end.
-        cond = node.cond
-
-        if isinstance(cond, BinOp) and cond.op in _OP_MAP:
-            left_place = self.gen(cond.left)
-            right_place = self.gen(cond.right)
-            then_label = self._new_label()
-            end_label = self._new_label()
-            op = _OP_MAP[cond.op]
-            self._emit(f"if {left_place} {op} {right_place} goto {then_label}")
-        else:
-            # Treat condition value as truthy (non-zero)
-            cond_place = self.gen(cond)
-            then_label = self._new_label()
-            end_label = self._new_label()
-            self._emit(f"if {cond_place} != 0 goto {then_label}")
-
-        # Else branch (or fall-through)
-        if node.else_block:
-            self._gen_block(node.else_block)
-        self._emit(f"goto {end_label}")
-
-        # Then branch
-        self._emit(f"{then_label}:")
-        self._gen_block(node.then_block)
-
-        self._emit(f"{end_label}:")
-        return ""
-
-    def _gen_while(self, node: WhileStmt) -> str:
-        start_label = self._new_label()
-        body_label = self._new_label()
-        end_label = self._new_label()
-
-        self._emit(f"{start_label}:")
-        cond = node.cond
-        if isinstance(cond, BinOp) and cond.op in _OP_MAP:
-            left_place = self.gen(cond.left)
-            right_place = self.gen(cond.right)
-            op = _OP_MAP[cond.op]
-            self._emit(f"if {left_place} {op} {right_place} goto {body_label}")
-        else:
-            cond_place = self.gen(cond)
-            self._emit(f"if {cond_place} != 0 goto {body_label}")
-
-        self._emit(f"goto {end_label}")
-        self._emit(f"{body_label}:")
-        self._gen_block(node.body)
-        self._emit(f"goto {start_label}")
-        self._emit(f"{end_label}:")
-        return ""
-
-    def _gen_return(self, node: ReturnStmt) -> str:
-        if node.value:
-            place = self.gen(node.value)
-            self._emit(f"return {place}")
-        else:
-            self._emit("return")
-        return ""
-
-    def _gen_binop(self, node: BinOp) -> str:
-        left_place = self.gen(node.left)
-        right_place = self.gen(node.right)
-        op = _OP_MAP[node.op]
-        tmp = self._new_tmp()
-        self._emit(f"{tmp} = {left_place} {op} {right_place}")
-        return tmp
-
-    def _gen_unary(self, node: UnaryOp) -> str:
-        operand_place = self.gen(node.operand)
-        tmp = self._new_tmp()
-        self._emit(f"{tmp} = 0 - {operand_place}")
-        return tmp
+            place = self.gen(node.operand)
+            temporary = self._new_tmp()
+            self._emit(f"{temporary} = -1 * {place}")
+            return temporary
+        if isinstance(node, ReturnStmt):
+            place = self.gen(node.value) if node.value is not None else ""
+            self._emit("return" + (f" {place}" if place else ""))
+            return ""
+        if isinstance(node, IfStmt):
+            then_label, end_label = self._new_label(), self._new_label()
+            self._condition(node.cond, then_label)
+            if node.else_block: self.gen(node.else_block)
+            self._emit(f"goto {end_label}")
+            self._emit(f"{then_label}:")
+            self.gen(node.then_block)
+            self._emit(f"{end_label}:")
+            return ""
+        if isinstance(node, WhileStmt):
+            start, body, end = self._new_label(), self._new_label(), self._new_label()
+            self._emit(f"{start}:")
+            self._condition(node.cond, body)
+            self._emit(f"goto {end}")
+            self._emit(f"{body}:")
+            self.gen(node.body)
+            self._emit(f"goto {start}")
+            self._emit(f"{end}:")
+            return ""
+        raise TypeError(f"Unknown AST node: {type(node).__name__}")
 
 
-# --------------------------------------------------------------------------- #
-#  Public entry point                                                          #
-# --------------------------------------------------------------------------- #
-
-def generate(ast: Program) -> List[str]:
-    """Walk AST and return a list of TAC instruction strings."""
-    cg = CodeGen()
-    cg.gen(ast)
-    return cg._code
+def generate(ast):
+    analyser, text = analyse(ast)
+    if any(issue.level == "error" for issue in analyser.issues):
+        raise CompilationError("Semantic analysis", text)
+    generator = CodeGen()
+    generator.gen(ast)
+    return generator._code
 
 
-def tac_lines_to_str(lines: List[str]) -> str:
-    return "\n".join(lines)
+def tac_lines_to_str(lines): return "\n".join(lines)

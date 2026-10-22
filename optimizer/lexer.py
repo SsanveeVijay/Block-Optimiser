@@ -1,91 +1,64 @@
-"""
-optimizer/lexer.py  –  Lexer for the simple source language.
-
-Supported tokens:
-  INT  FLOAT  ID  ASSIGN  PLUS MINUS STAR SLASH PERCENT
-  EQ NEQ LT GT LEQ GEQ
-  LPAREN RPAREN LBRACE RBRACE SEMI COMMA
-  IF ELSE WHILE RETURN
-  NUMBER  (integer literals)
-"""
-
+"""Source lexer with positions, comments and actionable diagnostics."""
 import re
 from dataclasses import dataclass
-from typing import List
-
-
-# --------------------------------------------------------------------------- #
-#  Token                                                                       #
-# --------------------------------------------------------------------------- #
+from .diagnostics import CompilationError
+from .numeric import number
 
 @dataclass
 class Token:
     kind: str
     value: str
     line: int
-
-    def __repr__(self):
-        return f"Token({self.kind}, {self.value!r}, line={self.line})"
-
-
-# --------------------------------------------------------------------------- #
-#  Token specification                                                         #
-# --------------------------------------------------------------------------- #
+    column: int = 1
 
 KEYWORDS = {"if", "else", "while", "return", "int", "float"}
-
 _RULES = [
-    ("NUMBER",   r"\d+(\.\d+)?"),
-    ("ID",       r"[A-Za-z_]\w*"),
-    ("COMMENT",  r"//[^\n]*"),       # must be before SLASH
-    ("LEQ",      r"<="),
-    ("GEQ",      r">="),
-    ("EQ",       r"=="),
-    ("NEQ",      r"!="),
-    ("LT",       r"<"),
-    ("GT",       r">"),
-    ("ASSIGN",   r"="),
-    ("PLUS",     r"\+"),
-    ("MINUS",    r"-"),
-    ("STAR",     r"\*"),
-    ("SLASH",    r"/"),
-    ("PERCENT",  r"%"),
-    ("LPAREN",   r"\("),
-    ("RPAREN",   r"\)"),
-    ("LBRACE",   r"\{"),
-    ("RBRACE",   r"\}"),
-    ("SEMI",     r";"),
-    ("COMMA",    r","),
-    ("NEWLINE",  r"\n"),
-    ("SKIP",     r"[ \t]+"),
-    ("MISMATCH", r"."),
+    ("NUMBER", r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"),
+    ("ID", r"[A-Za-z_][A-Za-z_0-9]*"),
+    ("COMMENT", r"//[^\n]*"),
+    ("BLOCK_COMMENT", r"/\*[\s\S]*?\*/"),
+    ("UNCLOSED_COMMENT", r"/\*[\s\S]*\Z"),
+    ("LEQ", r"<="), ("GEQ", r">="), ("EQ", r"=="), ("NEQ", r"!="),
+    ("LT", r"<"), ("GT", r">"), ("ASSIGN", r"="),
+    ("PLUS", r"\+"), ("MINUS", r"-"), ("STAR", r"\*"),
+    ("SLASH", r"/"), ("PERCENT", r"%"),
+    ("LPAREN", r"\("), ("RPAREN", r"\)"),
+    ("LBRACE", r"\{"), ("RBRACE", r"\}"),
+    ("SEMI", r";"), ("COMMA", r","),
+    ("SPACE", r"\s+"), ("MISMATCH", r"."),
 ]
+_MASTER = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in _RULES))
 
-_MASTER = re.compile(
-    "|".join(f"(?P<{name}>{pat})" for name, pat in _RULES)
-)
+class LexError(CompilationError):
+    def __init__(self, message, line=None, column=None, tokens=None):
+        super().__init__("Lexical analysis", message, line, column,
+                         {"tokens": tokens or [], "tokens_text": format_tokens(tokens or [])})
 
+def format_tokens(tokens):
+    return "Line:Col  Token          Value\n" + "\n".join(
+        f"{t.line:>4}:{t.column:<4} {t.kind:<14} {t.value!r}" for t in tokens)
 
-class LexError(Exception):
-    pass
-
-
-def tokenize(source: str) -> List[Token]:
-    tokens: List[Token] = []
-    line = 1
-    for mo in _MASTER.finditer(source):
-        kind = mo.lastgroup
-        value = mo.group()
-        if kind == "NEWLINE":
-            line += 1
-        elif kind in ("SKIP", "COMMENT"):
-            pass
-        elif kind == "MISMATCH":
-            raise LexError(f"Line {line}: unexpected character {value!r}")
-        else:
-            # Promote keywords
+def tokenize(source):
+    tokens = []
+    line, line_start = 1, 0
+    for match in _MASTER.finditer(source):
+        kind, value = match.lastgroup, match.group()
+        column = match.start() - line_start + 1
+        if kind in ("MISMATCH", "UNCLOSED_COMMENT"):
+            message = ("Unterminated block comment; expected '*/'" if kind == "UNCLOSED_COMMENT"
+                       else f"Unexpected character {value!r}")
+            raise LexError(message, line, column, tokens)
+        if kind not in ("SPACE", "COMMENT", "BLOCK_COMMENT"):
+            if kind == "NUMBER":
+                try:
+                    number(value)
+                except ValueError as error:
+                    raise LexError(str(error), line, column, tokens) from error
             if kind == "ID" and value in KEYWORDS:
-                kind = value.upper()  # e.g. "if" -> "IF"
-            tokens.append(Token(kind, value, line))
-    tokens.append(Token("EOF", "", line))
+                kind = value.upper()
+            tokens.append(Token(kind, value, line, column))
+        if "\n" in value:
+            line += value.count("\n")
+            line_start = match.start() + value.rfind("\n") + 1
+    tokens.append(Token("EOF", "", line, len(source) - line_start + 1))
     return tokens

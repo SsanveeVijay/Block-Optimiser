@@ -10,17 +10,18 @@ Grammar (simplified):
   while_stmt  ::= WHILE LPAREN expr RPAREN block
   return_stmt ::= RETURN expr? SEMI
   block       ::= LBRACE stmt* RBRACE
-  expr        ::= cmp
-  cmp         ::= add ( RELOP add )*
+  expr        ::= cmp ( (EQ | NEQ) cmp )*
+  cmp         ::= add ( (LT | GT | LEQ | GEQ) add )*
   add         ::= mul ( (PLUS | MINUS) mul )*
   mul         ::= unary ( (STAR | SLASH | PERCENT) unary )*
-  unary       ::= (MINUS)? primary
+  unary       ::= MINUS unary | primary
   primary     ::= NUMBER | ID | LPAREN expr RPAREN
 """
 
 from dataclasses import dataclass, field
 from typing import List, Optional
 from .lexer import Token, tokenize, LexError
+from .diagnostics import CompilationError
 
 
 # --------------------------------------------------------------------------- #
@@ -103,8 +104,9 @@ class Program(ASTNode):
 #  Parser                                                                      #
 # --------------------------------------------------------------------------- #
 
-class ParseError(Exception):
-    pass
+class ParseError(CompilationError):
+    def __init__(self, message, line=None, column=None):
+        super().__init__("Syntax analysis", message, line, column)
 
 
 class Parser:
@@ -125,7 +127,7 @@ class Parser:
         tok = self._cur()
         if tok.kind != kind:
             raise ParseError(
-                f"Line {tok.line}: expected {kind!r}, got {tok.kind!r} ({tok.value!r})"
+                f"Expected {kind!r}, got {tok.kind!r} ({tok.value!r})", tok.line, tok.column
             )
         self._pos += 1
         return tok
@@ -157,7 +159,7 @@ class Parser:
             return self._block()
         if tok.kind == "ID":
             return self._assign_stmt()
-        raise ParseError(f"Line {tok.line}: unexpected token {tok.kind!r} ({tok.value!r})")
+        raise ParseError(f"Unexpected token {tok.kind!r} ({tok.value!r})", tok.line, tok.column)
 
     def _decl_stmt(self) -> DeclStmt:
         typ_tok = self._cur()
@@ -218,11 +220,16 @@ class Parser:
     _RELOPS = {"LT", "GT", "LEQ", "GEQ", "EQ", "NEQ"}
 
     def _expr(self) -> ASTNode:
-        return self._cmp()
+        node = self._cmp()
+        while self._match("EQ", "NEQ"):
+            tok = self._cur()
+            self._pos += 1
+            node = BinOp(tok.value, node, self._cmp(), tok.line)
+        return node
 
     def _cmp(self) -> ASTNode:
         node = self._add()
-        while self._match(*self._RELOPS):
+        while self._match("LT", "GT", "LEQ", "GEQ"):
             op_tok = self._cur()
             self._pos += 1
             right = self._add()
@@ -251,7 +258,7 @@ class Parser:
         if self._match("MINUS"):
             tok = self._cur()
             self._pos += 1
-            return UnaryOp("-", self._primary(), tok.line)
+            return UnaryOp("-", self._unary(), tok.line)
         return self._primary()
 
     def _primary(self) -> ASTNode:
@@ -267,7 +274,7 @@ class Parser:
             node = self._expr()
             self._eat("RPAREN")
             return node
-        raise ParseError(f"Line {tok.line}: expected expression, got {tok.kind!r}")
+        raise ParseError(f"Expected expression, got {tok.kind!r}", tok.line, tok.column)
 
 
 # --------------------------------------------------------------------------- #

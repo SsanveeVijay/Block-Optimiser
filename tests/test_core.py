@@ -14,7 +14,8 @@ class Tests(unittest.TestCase):
                          [("B1", "B2"), ("B1", "B3"), ("B2", "B3")])
 
     def test_loop_edges(self):
-        r = run(open(os.path.join(ROOT, "samples", "sample1.tac")).read())
+        with open(os.path.join(ROOT, "samples", "sample1.tac")) as sample:
+            r = run(sample.read())
         self.assertIn(("B3", "B2"), r["cfg"].edges())
 
     def test_folding(self):

@@ -1,3 +1,6 @@
+from .diagnostics import CompilationError
+
+
 class CFG:
     def __init__(self, blocks):
         self.blocks = blocks
@@ -24,9 +27,9 @@ class CFG:
             last = b.instrs[-1]
             nxt = self.blocks[i + 1].name if i + 1 < len(self.blocks) else None
             if last.kind == "goto":
-                self._add(b.name, self._resolve(labels, last.target))
+                self._add(b.name, self._resolve(labels, last.target, last.line))
             elif last.kind == "cond":
-                self._add(b.name, self._resolve(labels, last.target))
+                self._add(b.name, self._resolve(labels, last.target, last.line))
                 if nxt:
                     self._add(b.name, nxt)
             elif last.kind == "return":
@@ -35,9 +38,9 @@ class CFG:
                 self._add(b.name, nxt)
 
     @staticmethod
-    def _resolve(labels, target):
+    def _resolve(labels, target, line=None):
         if target not in labels:
-            raise ValueError(f"Jump to undefined label '{target}'")
+            raise CompilationError("Control-flow graph", f"Jump to undefined label '{target}'", line)
         return labels[target]
 
     def edges(self):

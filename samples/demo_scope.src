@@ -1,0 +1,8 @@
+// Separate storage for shadowed names and generated temporaries.
+int t0 = 10;
+int x = 1;
+{
+    int x = 2;
+    t0 = t0 + x;
+}
+return t0 + x; // expected result: 13

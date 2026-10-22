@@ -1,0 +1,5 @@
+// Semantic errors are collected; no TAC should be generated.
+int x;
+int y = x + 1;
+missing = y;
+return y;

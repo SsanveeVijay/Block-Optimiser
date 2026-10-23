@@ -78,8 +78,10 @@ No functions, arrays, strings, logical operators, for loops or machine-code back
 - Modulo requires integers. Non-finite numeric literals are rejected.
 - Integer algebraic identities are skipped for any program containing float
   declarations/literals/casts, avoiding unsafe floating-point identities.
-- Nested declarations may shadow outer names. Generated names such as `__v0_x`
-  preserve separate storage; temporaries use `__t0`, labels `__L0`.
+- Source variables keep their original names when possible. Shadowed declarations
+  get a numeric suffix, such as `x1`, to preserve separate storage. Temporaries
+  use `t0`, `t1` and labels use `L0`, `L1`; generated names skip any source-name
+  collisions.
 - Variables must be declared and definitely initialized before use. Initialization
   after an if requires both branches; a loop alone does not establish initialization
   after the loop (it might execute zero times). This check is conservative.

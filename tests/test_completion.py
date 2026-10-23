@@ -37,6 +37,22 @@ class BehaviorTests(unittest.TestCase):
         self.check_source("int t0 = 10; int __t0 = 5; int x = 1; "
                           "{ int x = 2; t0 = t0 + x; } return t0 + x + __t0;", 18)
 
+    def test_readable_generated_names(self):
+        result = self.check_source("int a = 2 + 3; return a;", 5)
+        self.assertIn("t0 = 2 + 3", result["tac_text"])
+        self.assertIn("a = t0", result["tac_text"])
+        self.assertNotIn("__v", result["tac_text"])
+        self.assertNotIn("__t", result["tac_text"])
+
+    def test_readable_names_avoid_source_collisions(self):
+        result = self.check_source(
+            "int t0 = 10; int L0 = 1; int x1 = 7; int x = 2; "
+            "{ int x = 3; t0 = t0 + x; } "
+            "if (L0) { return t0 + x + x1; } else { return 0; }", 22)
+        self.assertIn("x2 = 3", result["tac_text"])
+        self.assertIn("t1 = t0 + x2", result["tac_text"])
+        self.assertIn("L1:", result["tac_text"])
+
     def test_shadow_initializer_sees_uninitialized_inner(self):
         with self.assertRaises(CompilationError):
             run_source("int x = 1; { int x = x + 1; }")

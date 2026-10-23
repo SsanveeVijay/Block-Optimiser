@@ -6,20 +6,27 @@ from .diagnostics import CompilationError
 
 
 class CodeGen:
-    def __init__(self):
+    def __init__(self, reserved_names=()):
         self._code = []
         self._tmp_counter = 0
         self._label_counter = 0
+        self._used_names = set(reserved_names)
 
     def _new_tmp(self):
-        name = f"__t{self._tmp_counter}"
-        self._tmp_counter += 1
-        return name
+        while True:
+            name = f"t{self._tmp_counter}"
+            self._tmp_counter += 1
+            if name not in self._used_names:
+                self._used_names.add(name)
+                return name
 
     def _new_label(self):
-        name = f"__L{self._label_counter}"
-        self._label_counter += 1
-        return name
+        while True:
+            name = f"L{self._label_counter}"
+            self._label_counter += 1
+            if name not in self._used_names:
+                self._used_names.add(name)
+                return name
 
     def _emit(self, text): self._code.append(text)
 
@@ -87,7 +94,7 @@ def generate(ast):
     analyser, text = analyse(ast)
     if any(issue.level == "error" for issue in analyser.issues):
         raise CompilationError("Semantic analysis", text)
-    generator = CodeGen()
+    generator = CodeGen(symbol.tac_name for symbol in analyser.symbols)
     generator.gen(ast)
     return generator._code
 

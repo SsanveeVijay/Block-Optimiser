@@ -40,11 +40,26 @@ def constant_value(node):
 
 
 class SemanticAnalyser:
-    def __init__(self):
+    def __init__(self, source_names=()):
         self.issues = []
         self.symbols = []
         self._scope = Scope()
         self._initialized = set()
+        self._source_names = set(source_names)
+        self._used_tac_names = set()
+
+    def _tac_name(self, name):
+        # Keep the source spelling when it is unique. Only shadowed or repeated
+        # declarations need a suffix, which must not collide with a source name.
+        if name not in self._used_tac_names:
+            result = name
+        else:
+            suffix = 1
+            while (candidate := f"{name}{suffix}") in self._source_names | self._used_tac_names:
+                suffix += 1
+            result = candidate
+        self._used_tac_names.add(result)
+        return result
 
     def _error(self, message, line): self.issues.append(SemanticIssue("error", message, line))
     def _warn(self, message, line): self.issues.append(SemanticIssue("warning", message, line))
@@ -68,7 +83,7 @@ class SemanticAnalyser:
             if symbol:
                 self._error(f"Variable '{node.name}' already declared in this scope", node.line)
             else:
-                symbol = Symbol(node.name, node.typ, node.line, f"__v{len(self.symbols)}_{node.name}")
+                symbol = Symbol(node.name, node.typ, node.line, self._tac_name(node.name))
                 self.symbols.append(symbol)
                 self._scope.declare(symbol)
             node.symbol = symbol
@@ -139,8 +154,20 @@ class SemanticAnalyser:
         return "unknown"
 
 
+def _declared_names(node):
+    if isinstance(node, DeclStmt):
+        return {node.name}
+    if isinstance(node, (Program, Block)):
+        return set().union(*(_declared_names(statement) for statement in node.stmts))
+    if isinstance(node, IfStmt):
+        return _declared_names(node.then_block) | (_declared_names(node.else_block) if node.else_block else set())
+    if isinstance(node, WhileStmt):
+        return _declared_names(node.body)
+    return set()
+
+
 def analyse(ast):
-    analyser = SemanticAnalyser()
+    analyser = SemanticAnalyser(_declared_names(ast))
     analyser.analyse(ast)
     text = "\n".join(str(issue) for issue in analyser.issues) or "No semantic errors found."
     return analyser, text

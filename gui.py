@@ -55,7 +55,7 @@ class App(tk.Tk):
         samples = sorted(p.name for p in SAMPLES.glob("*") if p.suffix in (".src", ".tac"))
         self.sample = ttk.Combobox(row, values=samples, state="readonly", width=20)
         self.sample.pack(side="left")
-        ttk.Button(row, text="Load", command=self.load).pack(side="left", padx=4)
+        ttk.Button(row, text="Load",         command=self.load).pack(side="left", padx=4)
         ttk.Button(row, text="Run Pipeline", command=self.analyze).pack(side="left")
         mode_row = ttk.Frame(left)
         mode_row.pack(fill="x", pady=(4, 0))

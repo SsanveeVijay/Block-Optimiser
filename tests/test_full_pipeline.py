@@ -164,7 +164,7 @@ class TestImpactAnalyzer(unittest.TestCase):
 
     def test_report_text_contains_bar_chart(self):
         res = run("a = 2 + 3\nb = a * 4\nreturn b\n")
-        self.assertIn("█", res["impact_text"])   # bar chart drawn
+        self.assertRegex(res["impact_text"], r"(?m)^Original\s+\|#+\s+\d+$")
         self.assertIn("Original", res["impact_text"])
 
     def test_report_text_contains_pass_name(self):

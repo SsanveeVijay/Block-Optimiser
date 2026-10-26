@@ -1,203 +1,173 @@
-"""
-optimizer/semantic.py  –  Semantic analysis pass.
-
-Checks performed:
-  1. Variable declared before use
-  2. Variable not declared twice in the same scope
-  3. Type consistency (int vs float) – warns on mixed arithmetic
-
-Returns a SymbolTable and a list of SemanticError / SemanticWarning messages.
-"""
-
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-from .parser_ast import (
-    ASTNode, Program, DeclStmt, AssignStmt, Block,
-    IfStmt, WhileStmt, ReturnStmt, BinOp, UnaryOp, NumberLit, Var
-)
-
-
-# --------------------------------------------------------------------------- #
-#  Symbol table                                                                #
-# --------------------------------------------------------------------------- #
+"""Scope resolution, numeric type checks and conservative definite assignment."""
+from dataclasses import dataclass
+from .parser_ast import (Program, DeclStmt, AssignStmt, Block, IfStmt, WhileStmt,
+                         ReturnStmt, BinOp, UnaryOp, NumberLit, Var)
+from .numeric import evaluate, number
 
 @dataclass
 class Symbol:
     name: str
-    typ: str            # "int" | "float" | "unknown"
+    typ: str
     declared_line: int
-
+    tac_name: str = ""
 
 class Scope:
-    def __init__(self, parent: Optional["Scope"] = None):
-        self._table: Dict[str, Symbol] = {}
+    def __init__(self, parent=None):
+        self._table = {}
         self.parent = parent
-
-    def declare(self, sym: Symbol):
-        self._table[sym.name] = sym
-
-    def lookup(self, name: str) -> Optional[Symbol]:
-        if name in self._table:
-            return self._table[name]
-        if self.parent:
-            return self.parent.lookup(name)
-        return None
-
-    def local_lookup(self, name: str) -> Optional[Symbol]:
-        return self._table.get(name)
-
-    def all_symbols(self) -> List[Symbol]:
-        return list(self._table.values())
-
-
-# --------------------------------------------------------------------------- #
-#  Semantic analyser                                                           #
-# --------------------------------------------------------------------------- #
+    def declare(self, symbol): self._table[symbol.name] = symbol
+    def local_lookup(self, name): return self._table.get(name)
+    def lookup(self, name):
+        return self.local_lookup(name) or (self.parent.lookup(name) if self.parent else None)
+    def all_symbols(self): return list(self._table.values())
 
 @dataclass
 class SemanticIssue:
-    level: str          # "error" | "warning"
+    level: str
     message: str
     line: int
-
     def __str__(self):
         return f"[{self.level.upper()}] Line {self.line}: {self.message}"
 
 
+def constant_value(node):
+    """Evaluate literal-only expressions; variables are deliberately unknown."""
+    if isinstance(node, NumberLit): return number(node.value)
+    if isinstance(node, UnaryOp): return -constant_value(node.operand)
+    if isinstance(node, BinOp):
+        return evaluate(node.op, constant_value(node.left), constant_value(node.right))
+    raise ValueError("Not a constant expression")
+
+
 class SemanticAnalyser:
-    def __init__(self):
-        self.issues: List[SemanticIssue] = []
-        self._scope = Scope()           # global scope
+    def __init__(self, source_names=()):
+        self.issues = []
+        self.symbols = []
+        self._scope = Scope()
+        self._initialized = set()
+        self._source_names = set(source_names)
+        self._used_tac_names = set()
 
-    # -- helpers -------------------------------------------------------------- #
+    def _tac_name(self, name):
+        # Keep the source spelling when it is unique. Only shadowed or repeated
+        # declarations need a suffix, which must not collide with a source name.
+        if name not in self._used_tac_names:
+            result = name
+        else:
+            suffix = 1
+            while (candidate := f"{name}{suffix}") in self._source_names | self._used_tac_names:
+                suffix += 1
+            result = candidate
+        self._used_tac_names.add(result)
+        return result
 
-    def _error(self, msg: str, line: int):
-        self.issues.append(SemanticIssue("error", msg, line))
+    def _error(self, message, line): self.issues.append(SemanticIssue("error", message, line))
+    def _warn(self, message, line): self.issues.append(SemanticIssue("warning", message, line))
 
-    def _warn(self, msg: str, line: int):
-        self.issues.append(SemanticIssue("warning", msg, line))
+    def analyse(self, node):
+        typ = self._visit(node)
+        node.value_type = typ
+        return typ
 
-    def _push(self):
-        self._scope = Scope(self._scope)
+    def _assignment_type(self, expected, actual, name, line):
+        if actual not in (expected, "unknown"):
+            self._warn(f"Assigning {actual!r} to '{name}' declared as {expected!r}; "
+                       + ("conversion truncates toward zero" if expected == "int" else "converted to float"), line)
 
-    def _pop(self):
-        self._scope = self._scope.parent
-
-    # -- visitors ------------------------------------------------------------- #
-
-    def analyse(self, node: ASTNode) -> str:
-        """Dispatch to the right visitor; returns inferred type string."""
+    def _visit(self, node):
         if isinstance(node, Program):
-            return self._visit_program(node)
+            for statement in node.stmts: self.analyse(statement)
+            return "void"
         if isinstance(node, DeclStmt):
-            return self._visit_decl(node)
+            symbol = self._scope.local_lookup(node.name)
+            if symbol:
+                self._error(f"Variable '{node.name}' already declared in this scope", node.line)
+            else:
+                symbol = Symbol(node.name, node.typ, node.line, self._tac_name(node.name))
+                self.symbols.append(symbol)
+                self._scope.declare(symbol)
+            node.symbol = symbol
+            if node.init is not None:
+                typ = self.analyse(node.init)
+                self._assignment_type(node.typ, typ, node.name, node.line)
+                self._initialized.add(symbol.tac_name)
+            return node.typ
         if isinstance(node, AssignStmt):
-            return self._visit_assign(node)
+            symbol = self._scope.lookup(node.name)
+            node.symbol = symbol
+            if not symbol:
+                self._error(f"Variable '{node.name}' used before declaration", node.line)
+            typ = self.analyse(node.value)
+            if symbol:
+                self._assignment_type(symbol.typ, typ, node.name, node.line)
+                self._initialized.add(symbol.tac_name)
+            return typ
         if isinstance(node, Block):
-            return self._visit_block(node)
+            parent = self._scope
+            self._scope = Scope(parent)
+            for statement in node.stmts: self.analyse(statement)
+            self._scope = parent
+            return "void"
         if isinstance(node, IfStmt):
-            return self._visit_if(node)
+            self.analyse(node.cond)
+            before = self._initialized.copy()
+            self.analyse(node.then_block)
+            then = self._initialized.copy()
+            self._initialized = before.copy()
+            if node.else_block: self.analyse(node.else_block)
+            self._initialized &= then
+            return "void"
         if isinstance(node, WhileStmt):
-            return self._visit_while(node)
+            self.analyse(node.cond)
+            before = self._initialized.copy()
+            self.analyse(node.body)
+            self._initialized = before
+            return "void"
         if isinstance(node, ReturnStmt):
-            return self._visit_return(node)
-        if isinstance(node, BinOp):
-            return self._visit_binop(node)
-        if isinstance(node, UnaryOp):
-            return self.analyse(node.operand)
+            return self.analyse(node.value) if node.value is not None else "void"
         if isinstance(node, NumberLit):
-            return "float" if "." in node.value else "int"
+            return "float" if isinstance(number(node.value), float) else "int"
         if isinstance(node, Var):
-            return self._visit_var(node)
+            symbol = self._scope.lookup(node.name)
+            node.symbol = symbol
+            if not symbol:
+                self._error(f"Variable '{node.name}' used before declaration", node.line)
+                return "unknown"
+            if symbol.tac_name not in self._initialized:
+                self._error(f"Variable '{node.name}' may be used before initialization", node.line)
+            return symbol.typ
+        if isinstance(node, UnaryOp): return self.analyse(node.operand)
+        if isinstance(node, BinOp):
+            left, right = self.analyse(node.left), self.analyse(node.right)
+            if node.op == "%" and "float" in (left, right):
+                self._error("Modulo requires integer operands", node.line)
+            if node.op in ("/", "%"):
+                try:
+                    if constant_value(node.right) == 0:
+                        self._error("Division or modulo by constant zero", node.line)
+                except (ValueError, ArithmeticError):
+                    pass
+            if left != right and "unknown" not in (left, right):
+                self._warn(f"Mixed types in expression: {left!r} {node.op} {right!r}", node.line)
+            if node.op in ("<", ">", "<=", ">=", "==", "!="): return "int"
+            return "float" if "float" in (left, right) else left
         return "unknown"
 
-    def _visit_program(self, node: Program) -> str:
-        for s in node.stmts:
-            self.analyse(s)
-        return "void"
 
-    def _visit_decl(self, node: DeclStmt) -> str:
-        if self._scope.local_lookup(node.name):
-            self._error(f"Variable '{node.name}' already declared in this scope", node.line)
-        else:
-            sym = Symbol(node.name, node.typ, node.line)
-            self._scope.declare(sym)
-        if node.init:
-            init_type = self.analyse(node.init)
-            if init_type not in (node.typ, "unknown"):
-                self._warn(
-                    f"Assigning {init_type!r} to '{node.name}' declared as {node.typ!r}",
-                    node.line,
-                )
-        return node.typ
-
-    def _visit_assign(self, node: AssignStmt) -> str:
-        sym = self._scope.lookup(node.name)
-        if not sym:
-            self._error(f"Variable '{node.name}' used before declaration", node.line)
-        val_type = self.analyse(node.value)
-        if sym and val_type not in (sym.typ, "unknown"):
-            self._warn(
-                f"Assigning {val_type!r} to '{node.name}' declared as {sym.typ!r}",
-                node.line,
-            )
-        return val_type
-
-    def _visit_block(self, node: Block) -> str:
-        self._push()
-        for s in node.stmts:
-            self.analyse(s)
-        self._pop()
-        return "void"
-
-    def _visit_if(self, node: IfStmt) -> str:
-        self.analyse(node.cond)
-        self._visit_block(node.then_block)
-        if node.else_block:
-            self._visit_block(node.else_block)
-        return "void"
-
-    def _visit_while(self, node: WhileStmt) -> str:
-        self.analyse(node.cond)
-        self._visit_block(node.body)
-        return "void"
-
-    def _visit_return(self, node: ReturnStmt) -> str:
-        if node.value:
-            return self.analyse(node.value)
-        return "void"
-
-    def _visit_binop(self, node: BinOp) -> str:
-        lt = self.analyse(node.left)
-        rt = self.analyse(node.right)
-        if lt != rt and "unknown" not in (lt, rt):
-            self._warn(
-                f"Mixed types in expression: {lt!r} {node.op} {rt!r}",
-                node.line,
-            )
-        return "float" if "float" in (lt, rt) else lt
-
-    def _visit_var(self, node: Var) -> str:
-        sym = self._scope.lookup(node.name)
-        if not sym:
-            self._error(f"Variable '{node.name}' used before declaration", node.line)
-            return "unknown"
-        return sym.typ
+def _declared_names(node):
+    if isinstance(node, DeclStmt):
+        return {node.name}
+    if isinstance(node, (Program, Block)):
+        return set().union(*(_declared_names(statement) for statement in node.stmts))
+    if isinstance(node, IfStmt):
+        return _declared_names(node.then_block) | (_declared_names(node.else_block) if node.else_block else set())
+    if isinstance(node, WhileStmt):
+        return _declared_names(node.body)
+    return set()
 
 
-# --------------------------------------------------------------------------- #
-#  Public entry point                                                          #
-# --------------------------------------------------------------------------- #
-
-def analyse(ast: Program):
-    """
-    Run semantic analysis on the AST.
-    Returns (analyser, issues_text).
-    """
-    sa = SemanticAnalyser()
-    sa.analyse(ast)
-    if sa.issues:
-        text = "\n".join(str(i) for i in sa.issues)
-    else:
-        text = "No semantic errors found."
-    return sa, text
+def analyse(ast):
+    analyser = SemanticAnalyser(_declared_names(ast))
+    analyser.analyse(ast)
+    text = "\n".join(str(issue) for issue in analyser.issues) or "No semantic errors found."
+    return analyser, text

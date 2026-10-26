@@ -1,0 +1,4 @@
+// Known branch is simplified; unreachable else block is removed.
+int x = 5;
+if (2 + 3 > 0) { x = x + 1; } else { x = 0; }
+return x; // expected result: 6

@@ -8,7 +8,7 @@ Rules applied per instruction:
   x * 0  →  0           0 * x  →  0
   x / 1  →  x
   x - x  →  0
-  x + x  →  2 * x  (kept as   tmp = x * 2  for clarity; not applied here to keep TAC simple)
+Floating-point programs skip these integer identities (no fast-math rules).
 """
 
 from dataclasses import replace
@@ -64,13 +64,16 @@ def simplify_block(block: Block) -> Tuple[Block, List[str]]:
     out, log = [], []
     for ins in block.instrs:
         new, msg = _simplify(ins)
+        new.line = ins.line
         if msg:
             log.append(msg)
         out.append(new)
     return Block(block.name, out), log
 
 
-def simplify_all(blocks: List[Block]) -> Tuple[List[Block], dict]:
+def simplify_all(blocks: List[Block], integer_only=True) -> Tuple[List[Block], dict]:
+    if not integer_only:
+        return list(blocks), {b.name: [] for b in blocks}
     new_blocks, log = [], {}
     for b in blocks:
         nb, changes = simplify_block(b)
